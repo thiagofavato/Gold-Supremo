@@ -45,26 +45,25 @@ def calcular_motor_supremo(df):
     
     df = df.copy()
     
-    # 1. Risco Plástico (ATR 14)
+    # Risco Plástico (ATR 14)
     high_low = df['High'] - df['Low']
     high_close = np.abs(df['High'] - df['Close'].shift())
     low_close = np.abs(df['Low'] - df['Close'].shift())
     df['ATR_14'] = np.max(pd.concat([high_low, high_close, low_close], axis=1), axis=1).rolling(14).mean()
     
-    # 2. Inércia Gráfica (Médias Móveis 9 e 21)
+    # Inércia Gráfica (Médias 9 e 21)
     df['MA_9'] = df['Close'].rolling(window=9).mean()
     df['MA_21'] = df['Close'].rolling(window=21).mean()
     
-    # 3. Aceleração Institucional (Storgrama 20-9-18)
+    # Aceleração Institucional (Storgrama 20-9-18)
     fast_ema = df['Close'].ewm(span=9, adjust=False).mean()
     slow_ema = df['Close'].ewm(span=20, adjust=False).mean()
     df['Stor_Line'] = fast_ema - slow_ema
     df['Stor_Signal'] = df['Stor_Line'].ewm(span=18, adjust=False).mean()
     
-    # 4. Filtro Institucional Dinâmico (Volume)
+    # Filtro Institucional Dinâmico (Volume)
     df['Vol_MA_20'] = df['Volume'].rolling(window=20).mean()
     
-    # Rastreio e Quad-Check
     df['Padrao'] = "Nenhum"
     df['Sinal'] = "AGUARDANDO"
     df['Entrada'] = np.nan
@@ -73,48 +72,46 @@ def calcular_motor_supremo(df):
     df['TP2'] = np.nan
     
     for i in range(2, len(df)):
-        v1 = df.iloc[i-2] # Vela 1 (Anterior)
-        v2 = df.iloc[i-1] # Vela 2 (Gatilho Fechado)
+        v1 = df.iloc[i-2] 
+        v2 = df.iloc[i-1] 
         
         o1, c1, h1, l1 = v1['Open'], v1['Close'], v1['High'], v1['Low']
         o2, c2, h2, l2 = v2['Open'], v2['Close'], v2['High'], v2['Low']
         
         atr_atual = v2['ATR_14']
         
-        # Geometria Exclusiva (Engolfos)
+        # Geometria (Engolfos)
         engolfo_alta = (c1 < o1) and (c2 > o2) and (c2 > o1) and (o2 < c1)
         engolfo_baixa = (c1 > o1) and (c2 < o2) and (o2 > c1) and (c2 < o1)
         
-        # Alinhamento Gráfico e Momentum
+        # Alinhamento
         grafico_comprado = v2['MA_9'] > v2['MA_21']
         ind_comprado = v2['Stor_Line'] > v2['Stor_Signal']
         
         grafico_vendido = v2['MA_9'] < v2['MA_21']
         ind_vendido = v2['Stor_Line'] < v2['Stor_Signal']
         
-        # A Chave Mestra do Volume (Anomalia Dinâmica)
+        # Volume
         volume_valido = v2['Volume'] > v2['Vol_MA_20']
         
         distancia_stop = atr_atual * 1.5
         
-        # GATILHO COMPRA
+        # COMPRA
         if engolfo_alta and grafico_comprado and ind_comprado and volume_valido:
             df.loc[df.index[i], 'Sinal'] = "COMPRA"
             df.loc[df.index[i], 'Padrao'] = "Engolfo de Alta"
             df.loc[df.index[i], 'Entrada'] = c2
-            
             sl = min(l1, l2) - distancia_stop
             risco = c2 - sl
             df.loc[df.index[i], 'Stop_Loss'] = sl
             df.loc[df.index[i], 'TP1'] = c2 + (risco * 1.5)
             df.loc[df.index[i], 'TP2'] = c2 + (risco * 2.0)
             
-        # GATILHO VENDA
+        # VENDA
         elif engolfo_baixa and grafico_vendido and ind_vendido and volume_valido:
             df.loc[df.index[i], 'Sinal'] = "VENDA"
             df.loc[df.index[i], 'Padrao'] = "Engolfo de Baixa"
             df.loc[df.index[i], 'Entrada'] = c2
-            
             sl = max(h1, h2) + distancia_stop
             risco = sl - c2
             df.loc[df.index[i], 'Stop_Loss'] = sl
@@ -128,6 +125,14 @@ def calcular_motor_supremo(df):
 # ==========================================
 st.markdown("<h2 style='text-align: center; color: #B8860B;'>💰 GOLD SUPREMO - PURE ACTION 🤖</h2>", unsafe_allow_html=True)
 
+# CALENDÁRIO DE FORWARD TEST (Limpa o histórico antigo)
+col1, col2, col3 = st.columns([1, 2, 1])
+with col2:
+    # Configurado para Domingo (29/03/2026) por padrão para zerar o relatório atual
+    hoje = datetime.date.today()
+    domingo = hoje + datetime.timedelta(days=(6 - hoje.weekday()))
+    data_inicio = st.date_input("📅 Data de Início do Forward Test (Diário Limpo)", domingo)
+
 @st.fragment(run_every="20s")
 def renderizar_motor():
     df_cru = buscar_dados_ouro("5d", "5m")
@@ -140,38 +145,31 @@ def renderizar_motor():
         c1, c2, c3, c4 = st.columns(4)
         
         c1.metric("Preço Atual", f"${vela_live['Close']:.2f}")
-        
-        status_grafico = "ALTA 🟩" if vela_live['MA_9'] > vela_live['MA_21'] else "BAIXA 🟥"
-        c2.metric("Inércia (MA 9/21)", status_grafico)
-        
-        status_stor = "ALTA 🟩" if vela_live['Stor_Line'] > vela_live['Stor_Signal'] else "BAIXA 🟥"
-        c3.metric("Storgrama (Momentum)", status_stor)
-        
-        status_vol = "PICO INSTITUCIONAL 🟢" if vela_live['Volume'] > vela_live['Vol_MA_20'] else "SECO 🔴"
-        c4.metric("Volume Dinâmico", status_vol)
+        c2.metric("Inércia (MA 9/21)", "ALTA 🟩" if vela_live['MA_9'] > vela_live['MA_21'] else "BAIXA 🟥")
+        c3.metric("Storgrama (Momentum)", "ALTA 🟩" if vela_live['Stor_Line'] > vela_live['Stor_Signal'] else "BAIXA 🟥")
+        c4.metric("Volume Dinâmico", "PICO INSTITUCIONAL 🟢" if vela_live['Volume'] > vela_live['Vol_MA_20'] else "SECO 🔴")
         
         st.divider()
         
-        # MÓDULO DE BACKTEST: Histórico Final
-        st.subheader("🔬 Laboratório de Backtest (Filtro de Volume Ativo)")
+        # MÓDULO DE BACKTEST: Aplica o filtro de data
+        st.subheader("🔬 Diário de Forward Test Real")
         
         sinais_historicos = df_tec[df_tec['Sinal'] != "AGUARDANDO"].copy()
         
+        # Só exibe os sinais a partir da data que você selecionou no calendário
+        sinais_historicos = sinais_historicos[sinais_historicos.index.date >= data_inicio]
+        
         if not sinais_historicos.empty:
             tabela_exibicao = sinais_historicos[['Sinal', 'Padrao', 'Entrada', 'Stop_Loss', 'TP1', 'TP2']].copy()
-            tabela_exibicao['Volume_Gatilho'] = sinais_historicos['Volume']
-            tabela_exibicao['Media_Vol'] = sinais_historicos['Vol_MA_20']
-            
+            tabela_exibicao['Vol_Gatilho'] = sinais_historicos['Volume']
             tabela_exibicao.index = tabela_exibicao.index.strftime('%d/%m %H:%M')
             
-            for col in ['Entrada', 'Stop_Loss', 'TP1', 'TP2', 'Volume_Gatilho', 'Media_Vol']:
+            for col in ['Entrada', 'Stop_Loss', 'TP1', 'TP2', 'Vol_Gatilho']:
                 tabela_exibicao[col] = tabela_exibicao[col].apply(lambda x: round(x, 2) if pd.notnull(x) else x)
                 
             st.dataframe(tabela_exibicao.iloc[::-1], use_container_width=True)
-            
-            st.success("✅ Filtro Quad-Check Ativo. Operações em mercados mortos e armadilhas de liquidez foram erradicadas.")
         else:
-            st.info("🟢 Filtro Quad-Check ativado. A máquina aguarda o alinhamento de Preço, Inércia, Momentum e Volume simultaneamente.")
+            st.info(f"🟢 Diário zerado e limpo. A máquina aguarda a abertura do mercado a partir de {data_inicio.strftime('%d/%m/%Y')} para iniciar o registro real.")
             
     else:
         st.error("❌ Falha ao processar os dados. Aguardando conexão com a Comex...")
