@@ -53,23 +53,19 @@ def calcular_motor_supremo(df):
     if df is None or len(df) < 50: return None
     df = df.copy()
     
-    # Risco Plástico (ATR 14)
     high_low = df['High'] - df['Low']
     high_close = np.abs(df['High'] - df['Close'].shift())
     low_close = np.abs(df['Low'] - df['Close'].shift())
     df['ATR_14'] = np.max(pd.concat([high_low, high_close, low_close], axis=1), axis=1).rolling(14).mean()
     
-    # Inércia Gráfica
     df['MA_9'] = df['Close'].rolling(window=9).mean()
     df['MA_21'] = df['Close'].rolling(window=21).mean()
     
-    # Aceleração Institucional (Storgrama)
     fast_ema = df['Close'].ewm(span=9, adjust=False).mean()
     slow_ema = df['Close'].ewm(span=20, adjust=False).mean()
     df['Stor_Line'] = fast_ema - slow_ema
     df['Stor_Signal'] = df['Stor_Line'].ewm(span=18, adjust=False).mean()
     
-    # Filtro Institucional Dinâmico (Volume)
     df['Vol_MA_20'] = df['Volume'].rolling(window=20).mean()
     
     df['Padrao'] = "Nenhum"
@@ -83,10 +79,8 @@ def calcular_motor_supremo(df):
         atr_atual = v2['ATR_14']
         engolfo_alta = (c1 < o1) and (c2 > o2) and (c2 > o1) and (o2 < c1)
         engolfo_baixa = (c1 > o1) and (c2 < o2) and (o2 > c1) and (c2 < o1)
-        
         distancia_stop = atr_atual * 1.5
         
-        # COMPRA
         if engolfo_alta and v2['MA_9'] > v2['MA_21'] and v2['Stor_Line'] > v2['Stor_Signal'] and v2['Volume'] > v2['Vol_MA_20']:
             df.loc[df.index[i], 'Sinal'] = "COMPRA"
             df.loc[df.index[i], 'Padrao'] = "Engolfo de Alta"
@@ -96,7 +90,6 @@ def calcular_motor_supremo(df):
             df.loc[df.index[i], 'TP1'] = c2 + ((c2 - sl) * 1.5)
             df.loc[df.index[i], 'TP2'] = c2 + ((c2 - sl) * 2.0)
             
-        # VENDA
         elif engolfo_baixa and v2['MA_9'] < v2['MA_21'] and v2['Stor_Line'] < v2['Stor_Signal'] and v2['Volume'] > v2['Vol_MA_20']:
             df.loc[df.index[i], 'Sinal'] = "VENDA"
             df.loc[df.index[i], 'Padrao'] = "Engolfo de Baixa"
@@ -119,11 +112,6 @@ with col2:
     domingo = hoje + datetime.timedelta(days=(6 - hoje.weekday()))
     data_inicio = st.date_input("📅 Data de Início do Forward Test", domingo)
 
-# Teste de Conexão Único (Opcional)
-if "gold_ready" not in st.session_state:
-    enviar_telegram("🟡 GOLD SUPREMO: Sistema de Alertas Conectado!")
-    st.session_state.gold_ready = True
-
 @st.fragment(run_every="20s")
 def renderizar_motor():
     df_cru = buscar_dados_ouro("5d", "5m")
@@ -132,7 +120,6 @@ def renderizar_motor():
     if df_tec is not None:
         u = df_tec.iloc[-1]
         
-        # --- ALERTA TELEGRAM EM TEMPO REAL ---
         if u['Sinal'] != "AGUARDANDO":
             id_sinal = f"gold_{df_tec.index[-1]}"
             if "last_gold_sid" not in st.session_state or st.session_state.last_gold_sid != id_sinal:
@@ -157,7 +144,7 @@ def renderizar_motor():
         sinais = sinais[sinais.index.date >= data_inicio]
         
         if not sinais.empty:
-            tab = sinais[['Sinal', 'Entrada', 'Stop_Loss', 'TP1', 'TP2']].copy()
+            tab = sinais[['Sinal', 'Padrao', 'Entrada', 'Stop_Loss', 'TP1', 'TP2']].copy()
             tab.index = tab.index.strftime('%d/%m %H:%M')
             st.dataframe(tab.iloc[::-1], use_container_width=True)
         else:
