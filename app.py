@@ -14,7 +14,7 @@ st.markdown("<style>[data-testid='stMetricValue']{font-size: 1.4rem !important;}
 TICKER_OURO = "MGC=F"
 
 # ==========================================
-# FASE 2: MOTOR DE EXTRAÇÃO DE DADOS (COMEX)
+# FASE 2: MOTOR DE EXTRAÇÃO DE DADOS
 # ==========================================
 @st.cache_data(ttl=60, show_spinner=False)
 def buscar_dados_ouro(periodo="5d", intervalo="5m"):
@@ -37,7 +37,7 @@ def buscar_dados_ouro(periodo="5d", intervalo="5m"):
         return None
 
 # ==========================================
-# FASE 3 E 4: A FUSÃO (ENGOLFO + STORGRAMA + 9/21)
+# FASE 6: QUAD-CHECK (ENGOLFO + 9/21 + STORGRAMA + VOLUME)
 # ==========================================
 def calcular_motor_supremo(df):
     if df is None or len(df) < 50:
@@ -61,7 +61,10 @@ def calcular_motor_supremo(df):
     df['Stor_Line'] = fast_ema - slow_ema
     df['Stor_Signal'] = df['Stor_Line'].ewm(span=18, adjust=False).mean()
     
-    # 4. Rastreio e Triple Check
+    # 4. Filtro Institucional Dinâmico (Volume)
+    df['Vol_MA_20'] = df['Volume'].rolling(window=20).mean()
+    
+    # Rastreio e Quad-Check
     df['Padrao'] = "Nenhum"
     df['Sinal'] = "AGUARDANDO"
     df['Entrada'] = np.nan
@@ -78,21 +81,24 @@ def calcular_motor_supremo(df):
         
         atr_atual = v2['ATR_14']
         
-        # Padrões Exclusivos (Engolfos)
+        # Geometria Exclusiva (Engolfos)
         engolfo_alta = (c1 < o1) and (c2 > o2) and (c2 > o1) and (o2 < c1)
         engolfo_baixa = (c1 > o1) and (c2 < o2) and (o2 > c1) and (c2 < o1)
         
-        # Confluência do Storgrama e Médias
+        # Alinhamento Gráfico e Momentum
         grafico_comprado = v2['MA_9'] > v2['MA_21']
         ind_comprado = v2['Stor_Line'] > v2['Stor_Signal']
         
         grafico_vendido = v2['MA_9'] < v2['MA_21']
         ind_vendido = v2['Stor_Line'] < v2['Stor_Signal']
         
+        # A Chave Mestra do Volume (Anomalia Dinâmica)
+        volume_valido = v2['Volume'] > v2['Vol_MA_20']
+        
         distancia_stop = atr_atual * 1.5
         
-        # GATILHO COMPRA: Engolfo + MA 9 acima da 21 + Storgrama Verde
-        if engolfo_alta and grafico_comprado and ind_comprado:
+        # GATILHO COMPRA
+        if engolfo_alta and grafico_comprado and ind_comprado and volume_valido:
             df.loc[df.index[i], 'Sinal'] = "COMPRA"
             df.loc[df.index[i], 'Padrao'] = "Engolfo de Alta"
             df.loc[df.index[i], 'Entrada'] = c2
@@ -103,8 +109,8 @@ def calcular_motor_supremo(df):
             df.loc[df.index[i], 'TP1'] = c2 + (risco * 1.5)
             df.loc[df.index[i], 'TP2'] = c2 + (risco * 2.0)
             
-        # GATILHO VENDA: Engolfo + MA 9 abaixo da 21 + Storgrama Vermelho
-        elif engolfo_baixa and grafico_vendido and ind_vendido:
+        # GATILHO VENDA
+        elif engolfo_baixa and grafico_vendido and ind_vendido and volume_valido:
             df.loc[df.index[i], 'Sinal'] = "VENDA"
             df.loc[df.index[i], 'Padrao'] = "Engolfo de Baixa"
             df.loc[df.index[i], 'Entrada'] = c2
@@ -130,7 +136,7 @@ def renderizar_motor():
     if df_tec is not None:
         vela_live = df_tec.iloc[-1]
         
-        st.subheader("📊 Radar Supremo M5 (Triple Check)")
+        st.subheader("📊 Radar Supremo M5 (Quad-Check)")
         c1, c2, c3, c4 = st.columns(4)
         
         c1.metric("Preço Atual", f"${vela_live['Close']:.2f}")
@@ -141,27 +147,31 @@ def renderizar_motor():
         status_stor = "ALTA 🟩" if vela_live['Stor_Line'] > vela_live['Stor_Signal'] else "BAIXA 🟥"
         c3.metric("Storgrama (Momentum)", status_stor)
         
-        c4.metric("ATR 14 (Risco)", f"${vela_live['ATR_14']:.2f}")
+        status_vol = "PICO INSTITUCIONAL 🟢" if vela_live['Volume'] > vela_live['Vol_MA_20'] else "SECO 🔴"
+        c4.metric("Volume Dinâmico", status_vol)
         
         st.divider()
         
-        # MÓDULO DE BACKTEST: Histórico de Sinais Refinados
-        st.subheader("🔬 Laboratório de Backtest (Pós-Fusão)")
+        # MÓDULO DE BACKTEST: Histórico Final
+        st.subheader("🔬 Laboratório de Backtest (Filtro de Volume Ativo)")
         
         sinais_historicos = df_tec[df_tec['Sinal'] != "AGUARDANDO"].copy()
         
         if not sinais_historicos.empty:
-            tabela_exibicao = sinais_historicos[['Sinal', 'Padrao', 'Entrada', 'Stop_Loss', 'TP1', 'TP2', 'MA_9', 'Stor_Line']].copy()
+            tabela_exibicao = sinais_historicos[['Sinal', 'Padrao', 'Entrada', 'Stop_Loss', 'TP1', 'TP2']].copy()
+            tabela_exibicao['Volume_Gatilho'] = sinais_historicos['Volume']
+            tabela_exibicao['Media_Vol'] = sinais_historicos['Vol_MA_20']
+            
             tabela_exibicao.index = tabela_exibicao.index.strftime('%d/%m %H:%M')
             
-            for col in ['Entrada', 'Stop_Loss', 'TP1', 'TP2', 'MA_9', 'Stor_Line']:
-                tabela_exibicao[col] = tabela_exibicao[col].apply(lambda x: round(x, 2))
+            for col in ['Entrada', 'Stop_Loss', 'TP1', 'TP2', 'Volume_Gatilho', 'Media_Vol']:
+                tabela_exibicao[col] = tabela_exibicao[col].apply(lambda x: round(x, 2) if pd.notnull(x) else x)
                 
             st.dataframe(tabela_exibicao.iloc[::-1], use_container_width=True)
             
-            st.success("✅ Triagem Suprema Concluída. Compare os novos horários com o BlackArrow. O ruído das 'facas caindo' foi aniquilado.")
+            st.success("✅ Filtro Quad-Check Ativo. Operações em mercados mortos e armadilhas de liquidez foram erradicadas.")
         else:
-            st.info("🟢 Filtro Triple Check ativado. Nenhum Engolfo perfeitamente alinhado com o Storgrama e as Médias foi detectado nos últimos 5 dias. O sistema está altamente seletivo.")
+            st.info("🟢 Filtro Quad-Check ativado. A máquina aguarda o alinhamento de Preço, Inércia, Momentum e Volume simultaneamente.")
             
     else:
         st.error("❌ Falha ao processar os dados. Aguardando conexão com a Comex...")
