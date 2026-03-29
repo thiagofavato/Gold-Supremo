@@ -50,23 +50,23 @@ def buscar_dados_ouro(periodo="5d", intervalo="5m"):
 # FASE 6: QUAD-CHECK E TRACKER DE STATUS
 # ==========================================
 def calcular_motor_supremo(df):
-    if df is None or len(df) < 200: return None # Aumentamos para 200 velas para calcular a SMA 200
+    if df is None or len(df) < 200: return None # Proteção: Exige 200 velas para a SMA 200
     df = df.copy()
     
-    # 1. Indicadores (Volatilidade e Volume)
+    # 1. Indicadores Base
     high_low = df['High'] - df['Low']
     high_close = np.abs(df['High'] - df['Close'].shift())
     low_close = np.abs(df['Low'] - df['Close'].shift())
     df['ATR_14'] = np.max(pd.concat([high_low, high_close, low_close], axis=1), axis=1).rolling(14).mean()
     df['Vol_MA_20'] = df['Volume'].rolling(window=20).mean()
 
-    # 2. NOVA ENGENHARIA DE MÉDIAS MÓVEIS (Conforme Doutrina Institucional)
-    df['EMA_9'] = df['Close'].ewm(span=9, adjust=False).mean()   # Reatividade Ultrasensível
-    df['EMA_21'] = df['Close'].ewm(span=21, adjust=False).mean() # Suporte Dinâmico Ativo
-    df['SMA_50'] = df['Close'].rolling(window=50).mean()         # Fronteira Estrutural
-    df['SMA_200'] = df['Close'].rolling(window=200).mean()       # Bússola Institucional Macro
+    # 2. Nova Engenharia de Médias Móveis Institucionais
+    df['EMA_9'] = df['Close'].ewm(span=9, adjust=False).mean()
+    df['EMA_21'] = df['Close'].ewm(span=21, adjust=False).mean()
+    df['SMA_50'] = df['Close'].rolling(window=50).mean()
+    df['SMA_200'] = df['Close'].rolling(window=200).mean()
     
-    # 3. MACD Histograma (Mantido intacto por enquanto)
+    # 3. MACD Histograma
     fast_ema = df['Close'].ewm(span=9, adjust=False).mean()
     slow_ema = df['Close'].ewm(span=20, adjust=False).mean()
     df['Stor_Line'] = fast_ema - slow_ema
@@ -77,7 +77,8 @@ def calcular_motor_supremo(df):
     df['Sinal'] = "AGUARDANDO"
     df['Status'] = "-" 
     
-    for i in range(2, len(df)):
+    # Começamos o loop no 200, pois antes disso não existe a Média de 200
+    for i in range(200, len(df)):
         v1, v2 = df.iloc[i-2], df.iloc[i-1]
         o1, c1, h1, l1 = v1['Open'], v1['Close'], v1['High'], v1['Low']
         o2, c2, h2, l2 = v2['Open'], v2['Close'], v2['High'], v2['Low']
@@ -87,13 +88,13 @@ def calcular_motor_supremo(df):
         engolfo_baixa = (c1 > o1) and (c2 < o2) and (o2 > c1) and (c2 < o1)
         distancia_stop = atr_atual * 1.5
         
-        # Filtros de Tendência
+        # Filtros Doutrinários
         tendencia_micro_alta = v2['EMA_9'] > v2['EMA_21']
         tendencia_micro_baixa = v2['EMA_9'] < v2['EMA_21']
         tendencia_macro_alta = c2 > v2['SMA_200'] and v2['SMA_50'] > v2['SMA_200']
         tendencia_macro_baixa = c2 < v2['SMA_200'] and v2['SMA_50'] < v2['SMA_200']
 
-        # GATILHO DE COMPRA (Engolfo + Micro Alta + Macro Alta + MACD + Volume)
+        # Execução Compra
         if engolfo_alta and tendencia_micro_alta and tendencia_macro_alta and v2['Stor_Line'] > v2['Stor_Signal'] and v2['Volume'] > v2['Vol_MA_20']:
             df.loc[df.index[i], 'Sinal'] = "COMPRA"
             df.loc[df.index[i], 'Padrao'] = "Engolfo de Alta"
@@ -103,7 +104,7 @@ def calcular_motor_supremo(df):
             df.loc[df.index[i], 'TP1'] = c2 + ((c2 - sl) * 1.5)
             df.loc[df.index[i], 'TP2'] = c2 + ((c2 - sl) * 2.0)
             
-        # GATILHO DE VENDA (Engolfo + Micro Baixa + Macro Baixa + MACD + Volume)
+        # Execução Venda
         elif engolfo_baixa and tendencia_micro_baixa and tendencia_macro_baixa and v2['Stor_Line'] < v2['Stor_Signal'] and v2['Volume'] > v2['Vol_MA_20']:
             df.loc[df.index[i], 'Sinal'] = "VENDA"
             df.loc[df.index[i], 'Padrao'] = "Engolfo de Baixa"
@@ -113,7 +114,59 @@ def calcular_motor_supremo(df):
             df.loc[df.index[i], 'TP1'] = c2 - ((sl - c2) * 1.5)
             df.loc[df.index[i], 'TP2'] = c2 - ((sl - c2) * 2.0)
 
-    # ... (O restante do código do Scanner de Desfecho/Viajante do Tempo continua exatamente igual aqui para baixo) ...
+    # 5. Scanner de Desfecho
+    sinais_gerados = df[df['Sinal'] != "AGUARDANDO"].index
+    for idx in sinais_gerados:
+        posicao_atual = df.index.get_loc(idx)
+        tipo = df.loc[idx, 'Sinal']
+        entrada = df.loc[idx, 'Entrada']
+        sl = df.loc[idx, 'Stop_Loss']
+        tp1 = df.loc[idx, 'TP1']
+        tp2 = df.loc[idx, 'TP2']
+        
+        status_op = "ATIVA 🟡"
+        bateu_tp1 = False
+        
+        for j in range(posicao_atual + 1, len(df)):
+            maxima_futura = df['High'].iloc[j]
+            minima_futura = df['Low'].iloc[j]
+            
+            if tipo == "COMPRA":
+                if not bateu_tp1:
+                    if minima_futura <= sl:
+                        status_op = "LOSS 🔴"
+                        break
+                    elif maxima_futura >= tp1:
+                        bateu_tp1 = True
+                        sl = entrada 
+                if bateu_tp1:
+                    if maxima_futura >= tp2:
+                        status_op = "GAIN TOTAL 🚀"
+                        break
+                    elif minima_futura <= sl:
+                        status_op = "SAIU NO ZERO ⚪ (Com TP1)"
+                        break
+                        
+            elif tipo == "VENDA":
+                if not bateu_tp1:
+                    if maxima_futura >= sl:
+                        status_op = "LOSS 🔴"
+                        break
+                    elif minima_futura <= tp1:
+                        bateu_tp1 = True
+                        sl = entrada 
+                if bateu_tp1:
+                    if minima_futura <= tp2:
+                        status_op = "GAIN TOTAL 🚀"
+                        break
+                    elif maxima_futura >= sl:
+                        status_op = "SAIU NO ZERO ⚪ (Com TP1)"
+                        break
+                        
+        df.loc[idx, 'Status'] = status_op
+
+    return df
+
 # ==========================================
 # PAINEL DE COMANDO (UI)
 # ==========================================
@@ -121,7 +174,6 @@ st.markdown("<h2 style='text-align: center; color: #B8860B;'>💰 GOLD SUPREMO -
 
 col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
-    # DATA LIMPA: Travada para hoje (limpa o histórico das semanas anteriores)
     data_inicio = st.date_input("📅 Data de Início do Forward Test", datetime.date.today())
 
 @st.fragment(run_every="20s")
@@ -146,10 +198,7 @@ def renderizar_motor():
         st.subheader("📊 Radar Supremo M5 (Quad-Check)")
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Preço Atual", f"${u['Close']:.2f}")
-        
-        # CORREÇÃO AQUI: Mudando de MA_9 e MA_21 para EMA_9 e EMA_21
         c2.metric("Inércia (EMA 9/21)", "ALTA 🟩" if u['EMA_9'] > u['EMA_21'] else "BAIXA 🟥")
-        
         c3.metric("Storgrama", "ALTA 🟩" if u['Stor_Line'] > u['Stor_Signal'] else "BAIXA 🟥")
         c4.metric("Volume", "PICO 🟢" if u['Volume'] > u['Vol_MA_20'] else "SECO 🔴")
         
@@ -165,5 +214,7 @@ def renderizar_motor():
             st.dataframe(tab.style.format(format_dict), use_container_width=True)
         else:
             st.info(f"🟢 Diário zerado. Aguardando novos sinais a partir de {data_inicio.strftime('%d/%m/%Y')}...")
+    else:
+        st.warning("⏳ Coletando dados institucionais (Processando as 200 velas iniciais necessárias para a SMA 200)...")
 
 renderizar_motor()
