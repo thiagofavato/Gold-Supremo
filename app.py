@@ -59,19 +59,18 @@ def calcular_motor_supremo(df):
     df['ATR_14'] = np.max(pd.concat([high_low, high_close, low_close], axis=1), axis=1).rolling(14).mean()
     df['Vol_MA_20'] = df['Volume'].rolling(window=20).mean()
 
-    # 2. Médias Móveis Institucionais
+    # 2. Médias Móveis Institucionais (Passo 1)
     df['EMA_9'] = df['Close'].ewm(span=9, adjust=False).mean()
     df['EMA_21'] = df['Close'].ewm(span=21, adjust=False).mean()
     df['SMA_50'] = df['Close'].rolling(window=50).mean()
     df['SMA_200'] = df['Close'].rolling(window=200).mean()
     
-    # 3. MACD Histograma
-    fast_ema = df['Close'].ewm(span=9, adjust=False).mean()
-    slow_ema = df['Close'].ewm(span=20, adjust=False).mean()
-    df['Stor_Line'] = fast_ema - slow_ema
-    df['Stor_Signal'] = df['Stor_Line'].ewm(span=18, adjust=False).mean()
+    # 3. PASSO 3: MACD Intradiário (8-17-9) e Histograma
+    df['MACD_Line'] = df['Close'].ewm(span=8, adjust=False).mean() - df['Close'].ewm(span=17, adjust=False).mean()
+    df['MACD_Signal'] = df['MACD_Line'].ewm(span=9, adjust=False).mean()
+    df['MACD_Hist'] = df['MACD_Line'] - df['MACD_Signal'] # A barra vertical exata
 
-    # 4. PASSO 2: RSI CALIBRADO PARA OURO (Wilder's Smoothing)
+    # 4. RSI Calibrado para Ouro (Passo 2)
     delta = df['Close'].diff()
     gain = delta.where(delta > 0, 0).ewm(alpha=1/14, adjust=False).mean()
     loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False).mean()
@@ -99,14 +98,22 @@ def calcular_motor_supremo(df):
         tendencia_macro_alta = c2 > v2['SMA_200'] and v2['SMA_50'] > v2['SMA_200']
         tendencia_macro_baixa = c2 < v2['SMA_200'] and v2['SMA_50'] < v2['SMA_200']
 
-        # Filtro Doutrinário (RSI - Regime Direcional)
-        # Compra: RSI precisa ter recuado pro suporte (>= 40) mas não estar super esticado (<= 75)
+        # Filtro Doutrinário (RSI)
         rsi_compra = 40 <= v2['RSI_14'] <= 75
-        # Venda: RSI precisa ter subido pra resistência (<= 60) mas não estar esmagado (>= 25)
         rsi_venda = 25 <= v2['RSI_14'] <= 60
 
-        # Execução Compra
-        if engolfo_alta and tendencia_micro_alta and tendencia_macro_alta and v2['Stor_Line'] > v2['Stor_Signal'] and v2['Volume'] > v2['Vol_MA_20'] and rsi_compra:
+        # Filtro Doutrinário (MACD Expansão)
+        macd_hist_atual = v2['MACD_Hist']
+        macd_hist_anterior = v1['MACD_Hist']
+        
+        # Expansão Alta: Barra atual é verde (positiva) e MAIOR que a barra anterior
+        macd_expansao_alta = (macd_hist_atual > 0) and (macd_hist_atual > macd_hist_anterior)
+        
+        # Expansão Baixa: Barra atual é vermelha (negativa) e "MAIOR" para baixo (menor que a anterior)
+        macd_expansao_baixa = (macd_hist_atual < 0) and (macd_hist_atual < macd_hist_anterior)
+
+        # Execução Compra (Quad-Check blindado)
+        if engolfo_alta and tendencia_micro_alta and tendencia_macro_alta and macd_expansao_alta and v2['Volume'] > v2['Vol_MA_20'] and rsi_compra:
             df.loc[df.index[i], 'Sinal'] = "COMPRA"
             df.loc[df.index[i], 'Padrao'] = "Engolfo de Alta"
             df.loc[df.index[i], 'Entrada'] = c2
@@ -115,8 +122,8 @@ def calcular_motor_supremo(df):
             df.loc[df.index[i], 'TP1'] = c2 + ((c2 - sl) * 1.5)
             df.loc[df.index[i], 'TP2'] = c2 + ((c2 - sl) * 2.0)
             
-        # Execução Venda
-        elif engolfo_baixa and tendencia_micro_baixa and tendencia_macro_baixa and v2['Stor_Line'] < v2['Stor_Signal'] and v2['Volume'] > v2['Vol_MA_20'] and rsi_venda:
+        # Execução Venda (Quad-Check blindado)
+        elif engolfo_baixa and tendencia_micro_baixa and tendencia_macro_baixa and macd_expansao_baixa and v2['Volume'] > v2['Vol_MA_20'] and rsi_venda:
             df.loc[df.index[i], 'Sinal'] = "VENDA"
             df.loc[df.index[i], 'Padrao'] = "Engolfo de Baixa"
             df.loc[df.index[i], 'Entrada'] = c2
@@ -194,6 +201,7 @@ def renderizar_motor():
     
     if df_tec is not None:
         u = df_tec.iloc[-1]
+        u_anterior = df_tec.iloc[-2] # Pega a vela anterior para comparar o MACD no Radar
         
         if u['Sinal'] != "AGUARDANDO":
             id_sinal = f"gold_{df_tec.index[-1]}"
@@ -206,13 +214,24 @@ def renderizar_motor():
                 if enviar_telegram(msg):
                     st.session_state.last_gold_sid = id_sinal
         
-        st.subheader("📊 Radar Supremo M5 (Quad-Check + RSI)")
+        st.subheader("📊 Radar Supremo M5 (Quad-Check Doutrinário)")
         
-        # Radar atualizado com 5 colunas para mostrar o RSI em tempo real
         c1, c2, c3, c4, c5 = st.columns(5)
         c1.metric("Preço Atual", f"${u['Close']:.2f}")
-        c2.metric("Inércia", "ALTA 🟩" if u['EMA_9'] > u['EMA_21'] else "BAIXA 🟥")
-        c3.metric("Storgrama", "ALTA 🟩" if u['Stor_Line'] > u['Stor_Signal'] else "BAIXA 🟥")
+        c2.metric("Inércia (EMA 9/21)", "ALTA 🟩" if u['EMA_9'] > u['EMA_21'] else "BAIXA 🟥")
+        
+        # Lógica visual da Expansão do MACD
+        macd_estado = "NEUTRO ⬜"
+        if u['MACD_Hist'] > 0 and u['MACD_Hist'] > u_anterior['MACD_Hist']:
+            macd_estado = "EXPANSÃO 🟩"
+        elif u['MACD_Hist'] < 0 and u['MACD_Hist'] < u_anterior['MACD_Hist']:
+            macd_estado = "QUEDA 🟥"
+        elif u['MACD_Hist'] > 0 and u['MACD_Hist'] < u_anterior['MACD_Hist']:
+            macd_estado = "CONTRAÇÃO 🟨" # Perdendo força de alta
+        elif u['MACD_Hist'] < 0 and u['MACD_Hist'] > u_anterior['MACD_Hist']:
+            macd_estado = "CONTRAÇÃO 🟨" # Perdendo força de queda
+            
+        c3.metric("MACD (8-17-9)", macd_estado)
         c4.metric("Volume", "PICO 🟢" if u['Volume'] > u['Vol_MA_20'] else "SECO 🔴")
         c5.metric("RSI (14)", f"{u['RSI_14']:.1f}")
         
