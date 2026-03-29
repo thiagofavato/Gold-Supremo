@@ -109,8 +109,8 @@ st.markdown("<h2 style='text-align: center; color: #B8860B;'>💰 GOLD SUPREMO -
 col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
     hoje = datetime.date.today()
-    domingo = hoje + datetime.timedelta(days=(6 - hoje.weekday()))
-    data_inicio = st.date_input("📅 Data de Início do Forward Test", domingo)
+    # TRAVA REMOVIDA: Agora puxa o histórico de 3 dias atrás para sempre ter dados na tela
+    data_inicio = st.date_input("📅 Data de Início do Forward Test", hoje - datetime.timedelta(days=3))
 
 @st.fragment(run_every="20s")
 def renderizar_motor():
@@ -148,6 +148,6 @@ def renderizar_motor():
             tab.index = tab.index.strftime('%d/%m %H:%M')
             st.dataframe(tab.iloc[::-1], use_container_width=True)
         else:
-            st.info(f"🟢 Aguardando abertura em {data_inicio.strftime('%d/%m/%Y')}.")
+            st.info(f"🟢 Aguardando sinais a partir de {data_inicio.strftime('%d/%m/%Y')}...")
 
 renderizar_motor()
