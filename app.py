@@ -13,7 +13,6 @@ st.markdown("<style>[data-testid='stMetricValue']{font-size: 1.4rem !important;}
 
 TICKER_OURO = "MGC=F"
 
-# --- FUNÇÃO DE DISPARO TELEGRAM ---
 def enviar_telegram(mensagem):
     try:
         if "telegram" not in st.secrets:
@@ -28,7 +27,7 @@ def enviar_telegram(mensagem):
         return False
 
 # ==========================================
-# FASE 2: MOTOR DE EXTRAÇÃO DE DADOS (M5 PURO)
+# FASE 2: MOTOR DE EXTRAÇÃO DE DADOS 
 # ==========================================
 @st.cache_data(ttl=60, show_spinner=False)
 def buscar_dados_ouro(periodo="5d", intervalo="5m"):
@@ -50,17 +49,17 @@ def buscar_dados_ouro(periodo="5d", intervalo="5m"):
 # FASE 6: QUAD-CHECK E TRACKER DE STATUS
 # ==========================================
 def calcular_motor_supremo(df):
-    if df is None or len(df) < 200: return None # Proteção: Exige 200 velas para a SMA 200
+    if df is None or len(df) < 200: return None 
     df = df.copy()
     
-    # 1. Indicadores Base
+    # 1. Volatilidade e Volume
     high_low = df['High'] - df['Low']
     high_close = np.abs(df['High'] - df['Close'].shift())
     low_close = np.abs(df['Low'] - df['Close'].shift())
     df['ATR_14'] = np.max(pd.concat([high_low, high_close, low_close], axis=1), axis=1).rolling(14).mean()
     df['Vol_MA_20'] = df['Volume'].rolling(window=20).mean()
 
-    # 2. Nova Engenharia de Médias Móveis Institucionais
+    # 2. Médias Móveis Institucionais
     df['EMA_9'] = df['Close'].ewm(span=9, adjust=False).mean()
     df['EMA_21'] = df['Close'].ewm(span=21, adjust=False).mean()
     df['SMA_50'] = df['Close'].rolling(window=50).mean()
@@ -71,13 +70,19 @@ def calcular_motor_supremo(df):
     slow_ema = df['Close'].ewm(span=20, adjust=False).mean()
     df['Stor_Line'] = fast_ema - slow_ema
     df['Stor_Signal'] = df['Stor_Line'].ewm(span=18, adjust=False).mean()
+
+    # 4. PASSO 2: RSI CALIBRADO PARA OURO (Wilder's Smoothing)
+    delta = df['Close'].diff()
+    gain = delta.where(delta > 0, 0).ewm(alpha=1/14, adjust=False).mean()
+    loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False).mean()
+    rs = gain / loss
+    df['RSI_14'] = 100 - (100 / (1 + rs))
     
-    # 4. Geração de Sinais
+    # 5. Geração de Sinais
     df['Padrao'] = "Nenhum"
     df['Sinal'] = "AGUARDANDO"
     df['Status'] = "-" 
     
-    # Começamos o loop no 200, pois antes disso não existe a Média de 200
     for i in range(200, len(df)):
         v1, v2 = df.iloc[i-2], df.iloc[i-1]
         o1, c1, h1, l1 = v1['Open'], v1['Close'], v1['High'], v1['Low']
@@ -88,14 +93,20 @@ def calcular_motor_supremo(df):
         engolfo_baixa = (c1 > o1) and (c2 < o2) and (o2 > c1) and (c2 < o1)
         distancia_stop = atr_atual * 1.5
         
-        # Filtros Doutrinários
+        # Filtros Doutrinários (Médias)
         tendencia_micro_alta = v2['EMA_9'] > v2['EMA_21']
         tendencia_micro_baixa = v2['EMA_9'] < v2['EMA_21']
         tendencia_macro_alta = c2 > v2['SMA_200'] and v2['SMA_50'] > v2['SMA_200']
         tendencia_macro_baixa = c2 < v2['SMA_200'] and v2['SMA_50'] < v2['SMA_200']
 
+        # Filtro Doutrinário (RSI - Regime Direcional)
+        # Compra: RSI precisa ter recuado pro suporte (>= 40) mas não estar super esticado (<= 75)
+        rsi_compra = 40 <= v2['RSI_14'] <= 75
+        # Venda: RSI precisa ter subido pra resistência (<= 60) mas não estar esmagado (>= 25)
+        rsi_venda = 25 <= v2['RSI_14'] <= 60
+
         # Execução Compra
-        if engolfo_alta and tendencia_micro_alta and tendencia_macro_alta and v2['Stor_Line'] > v2['Stor_Signal'] and v2['Volume'] > v2['Vol_MA_20']:
+        if engolfo_alta and tendencia_micro_alta and tendencia_macro_alta and v2['Stor_Line'] > v2['Stor_Signal'] and v2['Volume'] > v2['Vol_MA_20'] and rsi_compra:
             df.loc[df.index[i], 'Sinal'] = "COMPRA"
             df.loc[df.index[i], 'Padrao'] = "Engolfo de Alta"
             df.loc[df.index[i], 'Entrada'] = c2
@@ -105,7 +116,7 @@ def calcular_motor_supremo(df):
             df.loc[df.index[i], 'TP2'] = c2 + ((c2 - sl) * 2.0)
             
         # Execução Venda
-        elif engolfo_baixa and tendencia_micro_baixa and tendencia_macro_baixa and v2['Stor_Line'] < v2['Stor_Signal'] and v2['Volume'] > v2['Vol_MA_20']:
+        elif engolfo_baixa and tendencia_micro_baixa and tendencia_macro_baixa and v2['Stor_Line'] < v2['Stor_Signal'] and v2['Volume'] > v2['Vol_MA_20'] and rsi_venda:
             df.loc[df.index[i], 'Sinal'] = "VENDA"
             df.loc[df.index[i], 'Padrao'] = "Engolfo de Baixa"
             df.loc[df.index[i], 'Entrada'] = c2
@@ -114,7 +125,7 @@ def calcular_motor_supremo(df):
             df.loc[df.index[i], 'TP1'] = c2 - ((sl - c2) * 1.5)
             df.loc[df.index[i], 'TP2'] = c2 - ((sl - c2) * 2.0)
 
-    # 5. Scanner de Desfecho
+    # Scanner de Desfecho
     sinais_gerados = df[df['Sinal'] != "AGUARDANDO"].index
     for idx in sinais_gerados:
         posicao_atual = df.index.get_loc(idx)
@@ -195,12 +206,15 @@ def renderizar_motor():
                 if enviar_telegram(msg):
                     st.session_state.last_gold_sid = id_sinal
         
-        st.subheader("📊 Radar Supremo M5 (Quad-Check)")
-        c1, c2, c3, c4 = st.columns(4)
+        st.subheader("📊 Radar Supremo M5 (Quad-Check + RSI)")
+        
+        # Radar atualizado com 5 colunas para mostrar o RSI em tempo real
+        c1, c2, c3, c4, c5 = st.columns(5)
         c1.metric("Preço Atual", f"${u['Close']:.2f}")
-        c2.metric("Inércia (EMA 9/21)", "ALTA 🟩" if u['EMA_9'] > u['EMA_21'] else "BAIXA 🟥")
+        c2.metric("Inércia", "ALTA 🟩" if u['EMA_9'] > u['EMA_21'] else "BAIXA 🟥")
         c3.metric("Storgrama", "ALTA 🟩" if u['Stor_Line'] > u['Stor_Signal'] else "BAIXA 🟥")
         c4.metric("Volume", "PICO 🟢" if u['Volume'] > u['Vol_MA_20'] else "SECO 🔴")
+        c5.metric("RSI (14)", f"{u['RSI_14']:.1f}")
         
         st.divider()
         st.subheader("🔬 Diário de Forward Test Real")
