@@ -13,7 +13,7 @@ st.markdown("<style>[data-testid='stMetricValue']{font-size: 1.4rem !important;}
 
 TICKER_OURO = "MGC=F"
 
-# --- FUNÇÃO DE DISPARO TELEGRAM (VIA SECRETS) ---
+# --- FUNÇÃO DE DISPARO TELEGRAM ---
 def enviar_telegram(mensagem):
     try:
         if "telegram" not in st.secrets:
@@ -47,12 +47,13 @@ def buscar_dados_ouro(periodo="5d", intervalo="5m"):
         return None
 
 # ==========================================
-# FASE 6: QUAD-CHECK (ESTRATÉGIA ORIGINAL PRESERVADA)
+# FASE 6: QUAD-CHECK E TRACKER DE STATUS
 # ==========================================
 def calcular_motor_supremo(df):
     if df is None or len(df) < 50: return None
     df = df.copy()
     
+    # 1. Indicadores (Estrutura Intacta)
     high_low = df['High'] - df['Low']
     high_close = np.abs(df['High'] - df['Close'].shift())
     low_close = np.abs(df['Low'] - df['Close'].shift())
@@ -68,8 +69,10 @@ def calcular_motor_supremo(df):
     
     df['Vol_MA_20'] = df['Volume'].rolling(window=20).mean()
     
+    # 2. Geração de Sinais
     df['Padrao'] = "Nenhum"
     df['Sinal'] = "AGUARDANDO"
+    df['Status'] = "-" # Nova coluna do diário
     
     for i in range(2, len(df)):
         v1, v2 = df.iloc[i-2], df.iloc[i-1]
@@ -99,6 +102,57 @@ def calcular_motor_supremo(df):
             df.loc[df.index[i], 'TP1'] = c2 - ((sl - c2) * 1.5)
             df.loc[df.index[i], 'TP2'] = c2 - ((sl - c2) * 2.0)
 
+    # 3. Scanner de Desfecho (O Viajante do Tempo)
+    sinais_gerados = df[df['Sinal'] != "AGUARDANDO"].index
+    for idx in sinais_gerados:
+        posicao_atual = df.index.get_loc(idx)
+        tipo = df.loc[idx, 'Sinal']
+        entrada = df.loc[idx, 'Entrada']
+        sl = df.loc[idx, 'Stop_Loss']
+        tp1 = df.loc[idx, 'TP1']
+        tp2 = df.loc[idx, 'TP2']
+        
+        status_op = "ATIVA 🟡"
+        bateu_tp1 = False
+        
+        for j in range(posicao_atual + 1, len(df)):
+            maxima_futura = df['High'].iloc[j]
+            minima_futura = df['Low'].iloc[j]
+            
+            if tipo == "COMPRA":
+                if not bateu_tp1:
+                    if minima_futura <= sl:
+                        status_op = "LOSS 🔴"
+                        break
+                    elif maxima_futura >= tp1:
+                        bateu_tp1 = True
+                        sl = entrada # Puxa pro Zero a Zero
+                if bateu_tp1:
+                    if maxima_futura >= tp2:
+                        status_op = "GAIN TOTAL 🚀"
+                        break
+                    elif minima_futura <= sl:
+                        status_op = "SAIU NO ZERO ⚪ (Com TP1)"
+                        break
+                        
+            elif tipo == "VENDA":
+                if not bateu_tp1:
+                    if maxima_futura >= sl:
+                        status_op = "LOSS 🔴"
+                        break
+                    elif minima_futura <= tp1:
+                        bateu_tp1 = True
+                        sl = entrada # Puxa pro Zero a Zero
+                if bateu_tp1:
+                    if minima_futura <= tp2:
+                        status_op = "GAIN TOTAL 🚀"
+                        break
+                    elif maxima_futura >= sl:
+                        status_op = "SAIU NO ZERO ⚪ (Com TP1)"
+                        break
+                        
+        df.loc[idx, 'Status'] = status_op
+
     return df
 
 # ==========================================
@@ -108,9 +162,8 @@ st.markdown("<h2 style='text-align: center; color: #B8860B;'>💰 GOLD SUPREMO -
 
 col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
-    hoje = datetime.date.today()
-    # TRAVA REMOVIDA: Agora puxa o histórico de 3 dias atrás para sempre ter dados na tela
-    data_inicio = st.date_input("📅 Data de Início do Forward Test", hoje - datetime.timedelta(days=3))
+    # DATA LIMPA: Travada para hoje (limpa o histórico das semanas anteriores)
+    data_inicio = st.date_input("📅 Data de Início do Forward Test", datetime.date.today())
 
 @st.fragment(run_every="20s")
 def renderizar_motor():
@@ -144,10 +197,11 @@ def renderizar_motor():
         sinais = sinais[sinais.index.date >= data_inicio]
         
         if not sinais.empty:
-            tab = sinais[['Sinal', 'Padrao', 'Entrada', 'Stop_Loss', 'TP1', 'TP2']].copy()
+            tab = sinais[['Status', 'Sinal', 'Padrao', 'Entrada', 'Stop_Loss', 'TP1', 'TP2']].copy()
             tab.index = tab.index.strftime('%d/%m %H:%M')
-            st.dataframe(tab.iloc[::-1], use_container_width=True)
+            format_dict = {'Entrada': '${:.2f}', 'Stop_Loss': '${:.2f}', 'TP1': '${:.2f}', 'TP2': '${:.2f}'}
+            st.dataframe(tab.style.format(format_dict), use_container_width=True)
         else:
-            st.info(f"🟢 Aguardando sinais a partir de {data_inicio.strftime('%d/%m/%Y')}...")
+            st.info(f"🟢 Diário zerado. Aguardando novos sinais a partir de {data_inicio.strftime('%d/%m/%Y')}...")
 
 renderizar_motor()
