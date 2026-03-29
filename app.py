@@ -146,7 +146,10 @@ def renderizar_motor():
         st.subheader("📊 Radar Supremo M5 (Quad-Check)")
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Preço Atual", f"${u['Close']:.2f}")
-        c2.metric("Inércia", "ALTA 🟩" if u['MA_9'] > u['MA_21'] else "BAIXA 🟥")
+        
+        # CORREÇÃO AQUI: Mudando de MA_9 e MA_21 para EMA_9 e EMA_21
+        c2.metric("Inércia (EMA 9/21)", "ALTA 🟩" if u['EMA_9'] > u['EMA_21'] else "BAIXA 🟥")
+        
         c3.metric("Storgrama", "ALTA 🟩" if u['Stor_Line'] > u['Stor_Signal'] else "BAIXA 🟥")
         c4.metric("Volume", "PICO 🟢" if u['Volume'] > u['Vol_MA_20'] else "SECO 🔴")
         
