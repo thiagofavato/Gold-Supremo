@@ -59,18 +59,18 @@ def calcular_motor_supremo(df):
     df['ATR_14'] = np.max(pd.concat([high_low, high_close, low_close], axis=1), axis=1).rolling(14).mean()
     df['Vol_MA_20'] = df['Volume'].rolling(window=20).mean()
 
-    # 2. Médias Móveis Institucionais (Passo 1)
+    # 2. Médias Móveis Institucionais
     df['EMA_9'] = df['Close'].ewm(span=9, adjust=False).mean()
     df['EMA_21'] = df['Close'].ewm(span=21, adjust=False).mean()
     df['SMA_50'] = df['Close'].rolling(window=50).mean()
     df['SMA_200'] = df['Close'].rolling(window=200).mean()
     
-    # 3. PASSO 3: MACD Intradiário (8-17-9) e Histograma
+    # 3. MACD Intradiário (8-17-9) e Histograma
     df['MACD_Line'] = df['Close'].ewm(span=8, adjust=False).mean() - df['Close'].ewm(span=17, adjust=False).mean()
     df['MACD_Signal'] = df['MACD_Line'].ewm(span=9, adjust=False).mean()
-    df['MACD_Hist'] = df['MACD_Line'] - df['MACD_Signal'] # A barra vertical exata
+    df['MACD_Hist'] = df['MACD_Line'] - df['MACD_Signal'] 
 
-    # 4. RSI Calibrado para Ouro (Passo 2)
+    # 4. RSI Calibrado para Ouro
     delta = df['Close'].diff()
     gain = delta.where(delta > 0, 0).ewm(alpha=1/14, adjust=False).mean()
     loss = (-delta.where(delta < 0, 0)).ewm(alpha=1/14, adjust=False).mean()
@@ -92,27 +92,20 @@ def calcular_motor_supremo(df):
         engolfo_baixa = (c1 > o1) and (c2 < o2) and (o2 > c1) and (c2 < o1)
         distancia_stop = atr_atual * 1.5
         
-        # Filtros Doutrinários (Médias)
+        # Filtros Doutrinários
         tendencia_micro_alta = v2['EMA_9'] > v2['EMA_21']
         tendencia_micro_baixa = v2['EMA_9'] < v2['EMA_21']
         tendencia_macro_alta = c2 > v2['SMA_200'] and v2['SMA_50'] > v2['SMA_200']
         tendencia_macro_baixa = c2 < v2['SMA_200'] and v2['SMA_50'] < v2['SMA_200']
 
-        # Filtro Doutrinário (RSI)
         rsi_compra = 40 <= v2['RSI_14'] <= 75
         rsi_venda = 25 <= v2['RSI_14'] <= 60
 
-        # Filtro Doutrinário (MACD Expansão)
         macd_hist_atual = v2['MACD_Hist']
         macd_hist_anterior = v1['MACD_Hist']
-        
-        # Expansão Alta: Barra atual é verde (positiva) e MAIOR que a barra anterior
         macd_expansao_alta = (macd_hist_atual > 0) and (macd_hist_atual > macd_hist_anterior)
-        
-        # Expansão Baixa: Barra atual é vermelha (negativa) e "MAIOR" para baixo (menor que a anterior)
         macd_expansao_baixa = (macd_hist_atual < 0) and (macd_hist_atual < macd_hist_anterior)
 
-        # Execução Compra (Quad-Check blindado)
         if engolfo_alta and tendencia_micro_alta and tendencia_macro_alta and macd_expansao_alta and v2['Volume'] > v2['Vol_MA_20'] and rsi_compra:
             df.loc[df.index[i], 'Sinal'] = "COMPRA"
             df.loc[df.index[i], 'Padrao'] = "Engolfo de Alta"
@@ -122,7 +115,6 @@ def calcular_motor_supremo(df):
             df.loc[df.index[i], 'TP1'] = c2 + ((c2 - sl) * 1.5)
             df.loc[df.index[i], 'TP2'] = c2 + ((c2 - sl) * 2.0)
             
-        # Execução Venda (Quad-Check blindado)
         elif engolfo_baixa and tendencia_micro_baixa and tendencia_macro_baixa and macd_expansao_baixa and v2['Volume'] > v2['Vol_MA_20'] and rsi_venda:
             df.loc[df.index[i], 'Sinal'] = "VENDA"
             df.loc[df.index[i], 'Padrao'] = "Engolfo de Baixa"
@@ -192,7 +184,9 @@ st.markdown("<h2 style='text-align: center; color: #B8860B;'>💰 GOLD SUPREMO -
 
 col1, col2, col3 = st.columns([1, 2, 1])
 with col2:
-    data_inicio = st.date_input("📅 Data de Início do Forward Test", datetime.date.today())
+    # TRAVA REMOVIDA: Recua 2 dias por padrão para o diário não apagar o histórico na virada da meia-noite
+    data_padrao = datetime.date.today() - datetime.timedelta(days=2)
+    data_inicio = st.date_input("📅 Exibir histórico a partir de:", data_padrao)
 
 @st.fragment(run_every="20s")
 def renderizar_motor():
@@ -201,7 +195,7 @@ def renderizar_motor():
     
     if df_tec is not None:
         u = df_tec.iloc[-1]
-        u_anterior = df_tec.iloc[-2] # Pega a vela anterior para comparar o MACD no Radar
+        u_anterior = df_tec.iloc[-2] 
         
         if u['Sinal'] != "AGUARDANDO":
             id_sinal = f"gold_{df_tec.index[-1]}"
@@ -220,16 +214,15 @@ def renderizar_motor():
         c1.metric("Preço Atual", f"${u['Close']:.2f}")
         c2.metric("Inércia (EMA 9/21)", "ALTA 🟩" if u['EMA_9'] > u['EMA_21'] else "BAIXA 🟥")
         
-        # Lógica visual da Expansão do MACD
         macd_estado = "NEUTRO ⬜"
         if u['MACD_Hist'] > 0 and u['MACD_Hist'] > u_anterior['MACD_Hist']:
             macd_estado = "EXPANSÃO 🟩"
         elif u['MACD_Hist'] < 0 and u['MACD_Hist'] < u_anterior['MACD_Hist']:
             macd_estado = "QUEDA 🟥"
         elif u['MACD_Hist'] > 0 and u['MACD_Hist'] < u_anterior['MACD_Hist']:
-            macd_estado = "CONTRAÇÃO 🟨" # Perdendo força de alta
+            macd_estado = "CONTRAÇÃO 🟨" 
         elif u['MACD_Hist'] < 0 and u['MACD_Hist'] > u_anterior['MACD_Hist']:
-            macd_estado = "CONTRAÇÃO 🟨" # Perdendo força de queda
+            macd_estado = "CONTRAÇÃO 🟨" 
             
         c3.metric("MACD (8-17-9)", macd_estado)
         c4.metric("Volume", "PICO 🟢" if u['Volume'] > u['Vol_MA_20'] else "SECO 🔴")
